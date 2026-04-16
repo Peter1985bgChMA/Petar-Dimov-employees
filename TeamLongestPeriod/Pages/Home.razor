@@ -1,0 +1,174 @@
+﻿@page "/"
+
+<PageTitle>Home</PageTitle>
+<h1 class="pb-5">Team Longest Period</h1>
+
+<InputFile OnChange="OnFileSelected" accept=".csv" class="pb-5" />
+
+@if (bestPair != null)
+{
+    @if (bestPair.Projects.Count == 0)
+    {
+        <p><b>There are no employees who worked together on the same project at the same time.</b></p>
+    }
+    else{
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Employee #1</th>
+                    <th>Employee #2</th>
+                    <th>Project ID</th>
+                    <th>Days worked</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var project in bestPair.Projects)
+                {
+                    <tr>
+                        <td>@bestPair.FirstEmployee</td>
+                        <td>@bestPair.SecondEmployee</td>
+                        <td>@project.ProjectId</td>
+                        <td>@project.DaysWorked</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private PairWorkResult? bestPair = null;
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+
+        if (file.ContentType != "text/csv")
+            return;
+
+        using var stream = file.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024);
+        using var reader = new StreamReader(stream);
+
+        var csvText = await reader.ReadToEndAsync();
+
+        List<Employee> rows = ParseCsv(csvText);
+
+        bestPair = FindLongestWorkingPair(rows);
+    }
+
+    private List<Employee> ParseCsv(string csv)
+    {
+        using var reader = new StringReader(csv);
+
+        var config = new CsvConfiguration(CultureInfo.InvariantCulture)
+        {
+            HasHeaderRecord = false,
+            TrimOptions = TrimOptions.Trim,
+            Delimiter = ","
+        };
+
+        using var csvReader = new CsvReader(reader, config);
+        csvReader.Context.RegisterClassMap<EmployeeMap>();
+
+        return csvReader.GetRecords<Employee>().ToList();
+    }
+
+    private PairWorkResult? FindLongestWorkingPair(List<Employee> employees)
+    {
+        var pairResults = new Dictionary<(string, string), PairWorkResult>();
+
+        //Group by Project
+        var projects = new Dictionary<int, List<Employee>>();
+
+        foreach (var employee in employees)
+        {
+            if (!projects.ContainsKey(employee.ProjectId))
+            {
+                projects[employee.ProjectId] = new List<Employee>();
+            }
+
+            projects[employee.ProjectId].Add(employee);
+        }
+
+        foreach (var project in projects)
+        {
+            int projectId = project.Key;
+            var listOfEmployees = project.Value;
+
+            for (int i = 0; i < listOfEmployees.Count; i++)
+            {
+                for (int j = i + 1; j < listOfEmployees.Count; j++)
+                {
+                    var firstEmployee = listOfEmployees[i];
+                    var secondEmployee = listOfEmployees[j];
+
+                    DateTime start = MaxDate(firstEmployee.DateFrom, secondEmployee.DateFrom);
+                    DateTime end = MinDate(firstEmployee.LastWorkingDate, secondEmployee.LastWorkingDate);
+
+                    var overlapDays = (end - start).Days + 1;//Include both first and last day
+
+                    if (overlapDays > 0)
+                    {
+                        string employeeA = firstEmployee.Id < secondEmployee.Id
+                            ? firstEmployee.FullName
+                            : secondEmployee.FullName;
+
+                        string employeeB = firstEmployee.Id < secondEmployee.Id
+                            ? secondEmployee.FullName
+                            : firstEmployee.FullName;
+
+                        var key = (employeeA, employeeB);
+
+                        if (!pairResults.ContainsKey(key))
+                        {
+                            pairResults[key] = new PairWorkResult
+                            {
+                                FirstEmployee = employeeA,
+                                SecondEmployee = employeeB
+                            };
+                        }
+
+                        pairResults[key].TotalDays += overlapDays;
+
+                        var projectEntry =
+                            pairResults[key].Projects
+                                .FirstOrDefault(p => p.ProjectId == projectId);
+
+                        if (projectEntry == null)
+                        {
+                            pairResults[key].Projects.Add(new ProjectOverlap
+                            {
+                                ProjectId = projectId,
+                                DaysWorked = overlapDays
+                            });
+                        }
+                        else
+                        {
+                            projectEntry.DaysWorked += overlapDays;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (pairResults.Count > 0)
+        {
+            var maxPair = pairResults.Values
+                .OrderByDescending(v => v.TotalDays)
+                .First();
+            return maxPair;
+        }
+
+        return new PairWorkResult();
+    }
+
+    private DateTime MaxDate(DateTime a, DateTime b)
+    {
+        return a > b ? a : b;
+    }
+
+    private DateTime MinDate(DateTime a, DateTime b)
+    {
+        return a < b ? a : b;
+    }
+}
